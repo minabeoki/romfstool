@@ -117,7 +117,7 @@ func searchMagic(file *os.File) romfsInfo {
 
 		var header romfsHeader
 		err := binary.Read(file, binary.BigEndian, &header)
-		if err == io.EOF {
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
 			break
 		}
 		chkerr(err, "search magic")
@@ -178,7 +178,8 @@ func readDir(file *os.File, romfs romfsInfo, indent int) {
 		if finfo.ftype == FTYPE_LINK {
 			link := int64(finfo.info)
 			linfo := getFileInfo(file, romfs, link)
-			fstr += fmt.Sprintf(" -> %s", linfo.name)
+			fstr += fmt.Sprintf(" -> %s%s",
+				linfo.name, ftypeSymbol[linfo.ftype])
 		}
 
 		fmt.Printf("%08x: %s%s\n",
