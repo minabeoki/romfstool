@@ -13,15 +13,24 @@ const (
 	FHDR_NEXT_MASK = 0xfffffff0
 	FHDR_EXEC_MASK = 0x00000008
 	FHDR_TYPE_MASK = 0x00000007
-	FTYPE_LINK     = 0
-	FTYPE_DIR      = 1
-	FTYPE_FILE     = 2
+)
+
+const (
+	FTYPE_LINK = iota
+	FTYPE_DIR
+	FTYPE_FILE
+	FTYPE_SYMLINK
+	FTYPE_BLKDEV
+	FTYPE_CHRDEV
+	FTYPE_SOCKET
+	FTYPE_FIFO
 )
 
 var (
-	exitCode = 0
-	magic0   = [8]byte{0x2d, 0x72, 0x6f, 0x6d, 0x31, 0x66, 0x73, 0x2d}
-	magic1   = [8]byte{0x6d, 0x6f, 0x72, 0x2d, 0x2d, 0x73, 0x66, 0x31}
+	exitCode    = 0
+	magic0      = [8]byte{0x2d, 0x72, 0x6f, 0x6d, 0x31, 0x66, 0x73, 0x2d}
+	magic1      = [8]byte{0x6d, 0x6f, 0x72, 0x2d, 0x2d, 0x73, 0x66, 0x31}
+	ftypeSymbol = []string{"", "/", "", "@", "*", "*", "=", "="}
 )
 
 type romfsHeader struct {
@@ -37,6 +46,16 @@ type romfsFileHeader struct {
 	Size     uint32
 	Checksum uint32
 	// file name (variable length)
+}
+
+type fileInfo struct {
+	pos      int64
+	next     int64
+	size     int64
+	ftype    uint32
+	info     uint32
+	name     string
+	checksum uint32
 }
 
 func main() {
@@ -60,7 +79,6 @@ func chkerr(err error, msg ...string) {
 }
 
 func chkromfs(filename string) {
-	fmt.Printf("romfs: %s\n", filename)
 	file, err := os.Open(filename)
 	chkerr(err, "open")
 	defer file.Close()
@@ -69,58 +87,81 @@ func chkromfs(filename string) {
 	err = binary.Read(file, binary.BigEndian, &header)
 	chkerr(err, "binary.Read")
 
-	//fmt.Printf("%x\n", header.Magic)
-	//fmt.Printf("%08x\n", header.Checksum)
-	//fmt.Printf("%08x\n", header.Size)
-
 	// check magic and swap
 
 	swap := false
 	if header.Magic == magic0 {
 	} else if header.Magic == magic1 {
-		fmt.Println("swapped binary")
 		swap = true
 	} else {
 		fmt.Println("Not romfs")
 		return
 	}
 
+	fmt.Printf("%s", filename)
+	if swap {
+		fmt.Print(" swap")
+	}
+
 	volname := readString(file, swap)
-	fmt.Println("volume:", volname)
+	fmt.Printf(" [%s]\n", volname)
 
 	readDir(file, swap, 0)
+}
+
+func getFileInfo(file *os.File, swap bool, pos int64) fileInfo {
+	pos, err := file.Seek(pos, 0)
+	chkerr(err, "file.Seek")
+
+	var header romfsFileHeader
+	if swap {
+		err = binary.Read(file, binary.LittleEndian, &header)
+	} else {
+		err = binary.Read(file, binary.BigEndian, &header)
+	}
+	chkerr(err, "binary.Read")
+
+	return fileInfo{
+		pos:      pos,
+		next:     int64(header.Next & FHDR_NEXT_MASK),
+		size:     int64(header.Size),
+		ftype:    header.Next & FHDR_TYPE_MASK,
+		info:     header.Info,
+		name:     readString(file, swap),
+		checksum: header.Checksum,
+	}
 }
 
 func readDir(file *os.File, swap bool, indent int) {
 	for {
 		pos, err := file.Seek(0, 1)
+		chkerr(err, "file.Seek")
 
-		var header romfsFileHeader
-		if swap {
-			err = binary.Read(file, binary.LittleEndian, &header)
-		} else {
-			err = binary.Read(file, binary.BigEndian, &header)
+		spaces := strings.Repeat("  ", indent)
+		finfo := getFileInfo(file, swap, pos)
+
+		fstr := finfo.name + ftypeSymbol[finfo.ftype]
+
+		if finfo.ftype == FTYPE_LINK {
+			link := int64(finfo.info)
+			linfo := getFileInfo(file, swap, link)
+			fstr += fmt.Sprintf(" -> %s", linfo.name)
 		}
-		chkerr(err, "binary.Read")
 
-		next := header.Next & FHDR_NEXT_MASK
-		ftype := header.Next & FHDR_TYPE_MASK
-		info := header.Info
-		fname := readString(file, swap)
-		pre := strings.Repeat(" ", indent)
-		fmt.Printf("%s%x: nx:%x ft:%x info:%x %s\n",
-			pre, pos, next, ftype, info, fname)
+		fmt.Printf("%08x: %s%s\n",
+			finfo.pos, spaces, fstr)
 
-		if ftype == FTYPE_DIR && fname != "." {
-			file.Seek(int64(info), 0)
+		// traverse sub directory
+		if finfo.ftype == FTYPE_DIR && finfo.name != "." {
+			file.Seek(int64(finfo.info), 0)
 			readDir(file, swap, indent+1)
 		}
 
-		if next == 0 {
+		if finfo.next == 0 {
 			break
 		}
 
-		file.Seek(int64(next), 0)
+		file.Seek(finfo.next, 0)
 	}
 }
 
