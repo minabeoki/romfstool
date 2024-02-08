@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strings"
@@ -48,6 +49,11 @@ type romfsFileHeader struct {
 	// file name (variable length)
 }
 
+type romfsInfo struct {
+	base int64
+	swap bool
+}
+
 type fileInfo struct {
 	pos      int64
 	next     int64
@@ -83,38 +89,64 @@ func chkromfs(filename string) {
 	chkerr(err, "open")
 	defer file.Close()
 
-	var header romfsHeader
-	err = binary.Read(file, binary.BigEndian, &header)
-	chkerr(err, "binary.Read")
-
-	// check magic and swap
-
-	swap := false
-	if header.Magic == magic0 {
-	} else if header.Magic == magic1 {
-		swap = true
-	} else {
+	romfs := searchMagic(file)
+	if romfs.base < 0 {
 		fmt.Println("Not romfs")
 		return
 	}
 
 	fmt.Printf("%s", filename)
-	if swap {
+	if romfs.swap {
 		fmt.Print(" swap")
 	}
 
-	volname := readString(file, swap)
-	fmt.Printf(" [%s]\n", volname)
+	volname := readString(file, romfs.swap)
+	fmt.Printf(" [%s]", volname)
 
-	readDir(file, swap, 0)
+	if romfs.base > 0 {
+		fmt.Printf(" offset:+%x", romfs.base)
+	}
+	fmt.Println()
+
+	readDir(file, romfs, 0)
 }
 
-func getFileInfo(file *os.File, swap bool, pos int64) fileInfo {
-	pos, err := file.Seek(pos, 0)
+func searchMagic(file *os.File) romfsInfo {
+	for {
+		pos, _ := file.Seek(0, 1)
+
+		var header romfsHeader
+		err := binary.Read(file, binary.BigEndian, &header)
+		if err == io.EOF {
+			break
+		}
+		chkerr(err, "search magic")
+
+		if header.Magic == magic0 {
+			return romfsInfo{
+				base: pos,
+				swap: false,
+			}
+		} else if header.Magic == magic1 {
+			return romfsInfo{
+				base: pos,
+				swap: true,
+			}
+		}
+	}
+
+	return romfsInfo{
+		base: -1,
+		swap: true,
+	}
+}
+
+func getFileInfo(file *os.File, romfs romfsInfo, pos int64) fileInfo {
+	_, err := file.Seek(romfs.base+pos, 0)
 	chkerr(err, "file.Seek")
 
 	var header romfsFileHeader
-	if swap {
+	if romfs.swap {
 		err = binary.Read(file, binary.LittleEndian, &header)
 	} else {
 		err = binary.Read(file, binary.BigEndian, &header)
@@ -127,24 +159,25 @@ func getFileInfo(file *os.File, swap bool, pos int64) fileInfo {
 		size:     int64(header.Size),
 		ftype:    header.Next & FHDR_TYPE_MASK,
 		info:     header.Info,
-		name:     readString(file, swap),
+		name:     readString(file, romfs.swap),
 		checksum: header.Checksum,
 	}
 }
 
-func readDir(file *os.File, swap bool, indent int) {
+func readDir(file *os.File, romfs romfsInfo, indent int) {
 	for {
 		pos, err := file.Seek(0, 1)
 		chkerr(err, "file.Seek")
+		pos -= romfs.base
 
 		spaces := strings.Repeat("  ", indent)
-		finfo := getFileInfo(file, swap, pos)
+		finfo := getFileInfo(file, romfs, pos)
 
 		fstr := finfo.name + ftypeSymbol[finfo.ftype]
 
 		if finfo.ftype == FTYPE_LINK {
 			link := int64(finfo.info)
-			linfo := getFileInfo(file, swap, link)
+			linfo := getFileInfo(file, romfs, link)
 			fstr += fmt.Sprintf(" -> %s", linfo.name)
 		}
 
@@ -153,15 +186,15 @@ func readDir(file *os.File, swap bool, indent int) {
 
 		// traverse sub directory
 		if finfo.ftype == FTYPE_DIR && finfo.name != "." {
-			file.Seek(int64(finfo.info), 0)
-			readDir(file, swap, indent+1)
+			file.Seek(romfs.base+int64(finfo.info), 0)
+			readDir(file, romfs, indent+1)
 		}
 
 		if finfo.next == 0 {
 			break
 		}
 
-		file.Seek(finfo.next, 0)
+		file.Seek(romfs.base+finfo.next, 0)
 	}
 }
 
