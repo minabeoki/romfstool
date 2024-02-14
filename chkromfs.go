@@ -52,6 +52,7 @@ type romfsFileHeader struct {
 type romfsInfo struct {
 	base int64
 	swap bool
+	size uint32
 }
 
 type fileInfo struct {
@@ -95,19 +96,16 @@ func chkromfs(filename string) {
 		return
 	}
 
-	fmt.Printf("%s", filename)
-	if romfs.swap {
-		fmt.Print(" swap")
-	}
-
 	volname := readString(file, romfs.swap)
-	fmt.Printf(" [%s]", volname)
-
-	if romfs.base > 0 {
-		fmt.Printf(" offset:+%x", romfs.base)
+	fmt.Printf("volume name: %s\n", volname)
+	fmt.Printf("size: %d\n", romfs.size)
+	fmt.Printf("offset: 0x%x\n", romfs.base)
+	if romfs.swap {
+		fmt.Println("swapped")
 	}
-	fmt.Println()
 
+	fmt.Println()
+	fmt.Println("    offset      size  filename")
 	readDir(file, romfs, 0)
 }
 
@@ -126,18 +124,19 @@ func searchMagic(file *os.File) romfsInfo {
 			return romfsInfo{
 				base: pos,
 				swap: false,
+				size: header.Size,
 			}
 		} else if header.Magic == magic1 {
 			return romfsInfo{
 				base: pos,
 				swap: true,
+				size: swapWord(header.Size),
 			}
 		}
 	}
 
 	return romfsInfo{
 		base: -1,
-		swap: true,
 	}
 }
 
@@ -182,8 +181,8 @@ func readDir(file *os.File, romfs romfsInfo, indent int) {
 				linfo.name, ftypeSymbol[linfo.ftype])
 		}
 
-		fmt.Printf("%08x: %s%s\n",
-			finfo.pos, spaces, fstr)
+		fmt.Printf("0x%08x  %8d  %s%s\n",
+			finfo.pos, finfo.size, spaces, fstr)
 
 		// traverse sub directory
 		if finfo.ftype == FTYPE_DIR && finfo.name != "." {
@@ -226,4 +225,11 @@ func swapBinary(buf []byte) {
 		buf[i+0], buf[i+1], buf[i+2], buf[i+3] =
 			buf[i+3], buf[i+2], buf[i+1], buf[i+0]
 	}
+}
+
+func swapWord(data uint32) uint32 {
+	return (data&0x000000ff)<<24 |
+		(data&0x0000ff00)<<8 |
+		(data&0x00ff0000)>>8 |
+		(data&0xff000000)>>24
 }
