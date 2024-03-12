@@ -99,9 +99,11 @@ func chkromfs(filename string) {
 	volname := readString(file, romfs.swap)
 	fmt.Printf("volume name: %s\n", volname)
 	fmt.Printf("size: %d\n", romfs.size)
-	fmt.Printf("offset: 0x%x\n", romfs.base)
+	if romfs.base > 0 {
+		fmt.Printf("offset: 0x%x\n", romfs.base)
+	}
 	if romfs.swap {
-		fmt.Println("swapped")
+		fmt.Println("endian: swapped")
 	}
 
 	fmt.Println()
