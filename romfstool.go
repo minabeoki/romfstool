@@ -72,7 +72,7 @@ type fileInfo struct {
 
 func main() {
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: romfstool [-x dir]  <romfs img>\n")
+		fmt.Fprintf(os.Stderr, "Usage: romfstool [-x DIR] <ROMFS FILE>\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -249,10 +249,9 @@ func extractFile(file *os.File, romfs romfsInfo, finfo fileInfo, path string) {
 		if length < int64(cnt) {
 			cnt = int(length)
 		}
-		fw.Write(buf[:cnt])
-		//fmt.Printf("cnt: %d\n", cnt)
-
 		length -= int64(cnt)
+
+		fw.Write(buf[:cnt])
 	}
 }
 
