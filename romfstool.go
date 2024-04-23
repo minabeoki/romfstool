@@ -3,11 +3,11 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"flag"
 	"fmt"
 	"io"
 	"log"
 	"os"
-	"strings"
 )
 
 const (
@@ -32,6 +32,10 @@ var (
 	magic0      = [8]byte{0x2d, 0x72, 0x6f, 0x6d, 0x31, 0x66, 0x73, 0x2d}
 	magic1      = [8]byte{0x6d, 0x6f, 0x72, 0x2d, 0x2d, 0x73, 0x66, 0x31}
 	ftypeSymbol = []string{"", "/", "", "@", "*", "*", "=", "="}
+)
+
+var (
+	flagExtract = flag.String("x", "", "extract root dir")
 )
 
 type romfsHeader struct {
@@ -59,6 +63,7 @@ type fileInfo struct {
 	pos      int64
 	next     int64
 	size     int64
+	bodypos  int64
 	ftype    uint32
 	info     uint32
 	name     string
@@ -66,10 +71,16 @@ type fileInfo struct {
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("usage: chkromfs FILE")
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: romfstool [-x dir]  <romfs img>\n")
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+
+	if len(flag.Args()) < 1 {
+		flag.Usage()
 	} else {
-		chkromfs(os.Args[1])
+		romfstool(flag.Arg(0))
 	}
 
 	os.Exit(exitCode)
@@ -85,7 +96,7 @@ func chkerr(err error, msg ...string) {
 	}
 }
 
-func chkromfs(filename string) {
+func romfstool(filename string) {
 	file, err := os.Open(filename)
 	chkerr(err, "open")
 	defer file.Close()
@@ -105,10 +116,12 @@ func chkromfs(filename string) {
 	if romfs.swap {
 		fmt.Println("endian: swapped")
 	}
+	if *flagExtract != "" {
+		fmt.Printf("extract: %s\n", *flagExtract)
+	}
 
-	fmt.Println()
-	fmt.Println("    offset      size  filename")
-	readDir(file, romfs, 0)
+	fmt.Printf("\n    offset      size  filename\n")
+	readDir(file, romfs, "")
 }
 
 func searchMagic(file *os.File) romfsInfo {
@@ -154,24 +167,27 @@ func getFileInfo(file *os.File, romfs romfsInfo, pos int64) fileInfo {
 	}
 	chkerr(err, "binary.Read")
 
+	filename := readString(file, romfs.swap)
+	hdrlen := (16 + len(filename) + 1 + 15) & ^15
+
 	return fileInfo{
 		pos:      pos,
 		next:     int64(header.Next & FHDR_NEXT_MASK),
 		size:     int64(header.Size),
+		bodypos:  pos + int64(hdrlen),
 		ftype:    header.Next & FHDR_TYPE_MASK,
 		info:     header.Info,
-		name:     readString(file, romfs.swap),
+		name:     filename,
 		checksum: header.Checksum,
 	}
 }
 
-func readDir(file *os.File, romfs romfsInfo, indent int) {
+func readDir(file *os.File, romfs romfsInfo, path string) {
 	for {
 		pos, err := file.Seek(0, 1)
 		chkerr(err, "file.Seek")
 		pos -= romfs.base
 
-		spaces := strings.Repeat("  ", indent)
 		finfo := getFileInfo(file, romfs, pos)
 
 		fstr := finfo.name + ftypeSymbol[finfo.ftype]
@@ -183,13 +199,17 @@ func readDir(file *os.File, romfs romfsInfo, indent int) {
 				linfo.name, ftypeSymbol[linfo.ftype])
 		}
 
-		fmt.Printf("0x%08x  %8d  %s%s\n",
-			finfo.pos, finfo.size, spaces, fstr)
+		if finfo.ftype == FTYPE_FILE && *flagExtract != "" {
+			extractFile(file, romfs, finfo, path)
+		}
+
+		fmt.Printf("0x%08x  %8d  %s/%s\n",
+			finfo.pos, finfo.size, path, fstr)
 
 		// traverse sub directory
 		if finfo.ftype == FTYPE_DIR && finfo.name != "." {
 			file.Seek(romfs.base+int64(finfo.info), 0)
-			readDir(file, romfs, indent+1)
+			readDir(file, romfs, path+"/"+finfo.name)
 		}
 
 		if finfo.next == 0 {
@@ -197,6 +217,42 @@ func readDir(file *os.File, romfs romfsInfo, indent int) {
 		}
 
 		file.Seek(romfs.base+finfo.next, 0)
+	}
+}
+
+func extractFile(file *os.File, romfs romfsInfo, finfo fileInfo, path string) {
+	rootdir := *flagExtract
+	if path != "" {
+		rootdir += "/" + path
+	}
+
+	err := os.MkdirAll(rootdir, 0755)
+	chkerr(err, "os.MkdirAll")
+
+	_, err = file.Seek(romfs.base+finfo.bodypos, 0)
+	chkerr(err, "file.Seek")
+
+	fw, err := os.Create(rootdir + "/" + finfo.name)
+	chkerr(err, "os.Create")
+	defer fw.Close()
+
+	buf := make([]byte, 4096)
+	length := finfo.size
+	for length > 0 {
+		cnt, err := file.Read(buf)
+		chkerr(err, "Read")
+
+		if romfs.swap {
+			swapBinary(buf)
+		}
+
+		if length < int64(cnt) {
+			cnt = int(length)
+		}
+		fw.Write(buf[:cnt])
+		//fmt.Printf("cnt: %d\n", cnt)
+
+		length -= int64(cnt)
 	}
 }
 
