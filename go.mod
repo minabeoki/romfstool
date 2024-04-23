@@ -1,3 +1,3 @@
-module chkromfs
+module romfstool
 
 go 1.21.6
