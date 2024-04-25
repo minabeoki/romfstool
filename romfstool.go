@@ -109,9 +109,9 @@ func romfstool(filename string) {
 
 	volname := readString(file, romfs.swap)
 	fmt.Printf("volume name: %s\n", volname)
-	fmt.Printf("size: %d\n", romfs.size)
+	fmt.Printf("romfs size: %d (0x%x)\n", romfs.size, romfs.size)
 	if romfs.base > 0 {
-		fmt.Printf("offset: 0x%x\n", romfs.base)
+		fmt.Printf("romfs offset: 0x%x\n", romfs.base)
 	}
 	if romfs.swap {
 		fmt.Println("endian: swapped")
@@ -168,7 +168,7 @@ func getFileInfo(file *os.File, romfs romfsInfo, pos int64) fileInfo {
 	chkerr(err, "binary.Read")
 
 	filename := readString(file, romfs.swap)
-	hdrlen := (16 + len(filename) + 1 + 15) & ^15
+	hdrlen := align16(16 + len(filename) + 1)
 
 	return fileInfo{
 		pos:      pos,
@@ -189,7 +189,6 @@ func readDir(file *os.File, romfs romfsInfo, path string) {
 		pos -= romfs.base
 
 		finfo := getFileInfo(file, romfs, pos)
-
 		fstr := finfo.name + ftypeSymbol[finfo.ftype]
 
 		if finfo.ftype == FTYPE_LINK {
@@ -204,7 +203,7 @@ func readDir(file *os.File, romfs romfsInfo, path string) {
 		}
 
 		fmt.Printf("0x%08x  %8d  %s/%s\n",
-			finfo.pos, finfo.size, path, fstr)
+			romfs.base+finfo.pos, finfo.size, path, fstr)
 
 		// traverse sub directory
 		if finfo.ftype == FTYPE_DIR && finfo.name != "." {
@@ -271,10 +270,14 @@ func readString(file *os.File, swap bool) string {
 
 	str := string(data[0:length])
 
-	aligned := (len(str) + 1 + 15) & 0xfffffff0
+	aligned := align16(len(str) + 1)
 	file.Seek(int64(aligned-count), 1)
 
 	return str
+}
+
+func align16(n int) int {
+	return (n + 15) & ^15
 }
 
 func swapBinary(buf []byte) {
