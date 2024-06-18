@@ -8,7 +8,9 @@ And extract files from RomFS image file.
 ## Usage
 
 Show the romfs informations:
+
     > romfstool romfs_image.bin
 
 Extract files:
+
     > romfstool -x destdir romfs_image.bin
