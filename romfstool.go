@@ -75,21 +75,31 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Usage: romfstool [-x DIR] <ROMFS FILE>\n")
 		flag.PrintDefaults()
 	}
-	flag.Parse()
 
-	if len(flag.Args()) < 1 {
+	var args []string
+	for {
+		flag.Parse()
+		if flag.NArg() == 0 {
+			break
+		}
+		args = append(args, flag.Arg(0))
+		os.Args = append(os.Args[0:1], flag.Args()[1:]...)
+	}
+
+	if len(args) < 1 {
 		flag.Usage()
 	} else {
-		romfstool(flag.Arg(0))
+		romfstool(args[0])
 	}
 
 	os.Exit(exitCode)
 }
 
-func chkerr(err error, msg ...string) {
+func chkerr(err error, args ...any) {
 	if err != nil {
-		if len(msg) > 0 {
-			log.Fatal(fmt.Sprintf("%s: %s", msg[0], err))
+		if len(args) > 0 {
+			msg := fmt.Sprintf(args[0].(string), args[1:]...)
+			log.Fatalf("%s: %s\n", msg, err)
 		} else {
 			log.Fatal(err)
 		}
